@@ -1,6 +1,6 @@
-import metaphone from "metaphone";
+import * as metaphoneLib from "metaphone";
 import * as natural from "natural";
-import stringSimilarity from "string-similarity";
+import * as stringSimilarity from "string-similarity";
 
 export interface AnalysisResult {
   pronunciationScore: number;
@@ -38,7 +38,7 @@ export class PronunciationAnalyzer {
     const phonemeSimilarity = maxLength > 0 ? 1 - (distance / maxLength) : 0;
 
     // Calculate string similarity as additional measure
-    const stringSim = stringSimilarity.compareTwoStrings(target, spoken);
+    const stringSim = (stringSimilarity as any).compareTwoStrings(target, spoken);
 
     // Combine metrics with weights
     const baseScore = (phonemeSimilarity * 0.4) + (stringSim * 0.2) + (deepgramConfidence * 0.4);
@@ -65,7 +65,8 @@ export class PronunciationAnalyzer {
   private getPhonetic(word: string): string {
     try {
       // Use metaphone for phonetic encoding
-      return metaphone(word) || word;
+      const result = (metaphoneLib as any)(word);
+      return result || word;
     } catch {
       return word;
     }

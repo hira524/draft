@@ -35,6 +35,9 @@ export default function PronunciationGame() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioQueueRef = useRef<AudioBuffer[]>([]);
   const isPlayingRef = useRef(false);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const captureContextRef = useRef<AudioContext | null>(null);
+  const botIsSpeakingRef = useRef(false);
 
   // Initialize WebSocket connection
   useEffect(() => {
@@ -59,6 +62,7 @@ export default function PronunciationGame() {
       switch (message.event) {
         case "game_state":
           setGameState(message.data);
+          botIsSpeakingRef.current = message.data.botIsSpeaking;
           break;
         
         case "transcript":
@@ -85,11 +89,27 @@ export default function PronunciationGame() {
           break;
         
         case "audio_chunk":
-          if (audioContextRef.current) {
-            const audioData = new Uint8Array(message.data);
-            const audioBuffer = await audioContextRef.current.decodeAudioData(audioData.buffer);
-            audioQueueRef.current.push(audioBuffer);
-            playNextAudio();
+          if (audioContextRef.current && message.data && Array.isArray(message.data)) {
+            try {
+              // Convert array back to audio data
+              const audioData = new Uint8Array(message.data);
+              
+              // Create audio buffer directly from PCM data
+              const audioBuffer = audioContextRef.current.createBuffer(1, audioData.length / 2, 16000);
+              const channelData = audioBuffer.getChannelData(0);
+              
+              // Convert Int16 PCM to Float32
+              const dataView = new DataView(audioData.buffer);
+              for (let i = 0; i < channelData.length; i++) {
+                const int16 = dataView.getInt16(i * 2, true);
+                channelData[i] = int16 / (int16 < 0 ? 0x8000 : 0x7FFF);
+              }
+              
+              audioQueueRef.current.push(audioBuffer);
+              playNextAudio();
+            } catch (error) {
+              console.error("Error processing audio chunk:", error);
+            }
           }
           break;
         
@@ -122,46 +142,57 @@ export default function PronunciationGame() {
 
     return () => {
       ws.close();
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(track => track.stop());
-      }
     };
   }, [gameStarted, childName, toast]);
 
-  // Initialize audio context and microphone
+  // Initialize audio context and microphone (once only)
   useEffect(() => {
     if (!gameStarted) return;
 
     const initAudio = async () => {
       try {
-        // Initialize AudioContext
+        // Initialize AudioContext for playback
         audioContextRef.current = new AudioContext({ sampleRate: 16000 });
         
         // Request microphone access
         const stream = await navigator.mediaDevices.getUserMedia({ 
           audio: {
-            sampleRate: 16000,
             channelCount: 1,
             echoCancellation: true,
             noiseSuppression: true,
+            autoGainControl: true,
           } 
         });
         mediaStreamRef.current = stream;
 
-        // Setup audio processing
-        const source = audioContextRef.current.createMediaStreamSource(stream);
-        const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
+        // Create AudioContext for capturing (browser native sample rate, typically 48kHz)
+        const captureContext = new AudioContext();
+        captureContextRef.current = captureContext;
+        
+        const source = captureContext.createMediaStreamSource(stream);
+        // Use valid buffer size (power of 2)
+        const processor = captureContext.createScriptProcessor(4096, 1, 1);
+        processorRef.current = processor;
         
         processor.onaudioprocess = (e) => {
-          if (wsRef.current?.readyState === WebSocket.OPEN && !gameState.botIsSpeaking) {
+          // Only send if WebSocket is open and bot is not speaking (use ref for current value)
+          if (wsRef.current?.readyState === WebSocket.OPEN && !botIsSpeakingRef.current) {
             const inputData = e.inputBuffer.getChannelData(0);
-            const pcmData = new Int16Array(inputData.length);
             
-            for (let i = 0; i < inputData.length; i++) {
-              const s = Math.max(-1, Math.min(1, inputData[i]));
+            // Downsample from browser sample rate (e.g., 48kHz) to 16kHz
+            const targetSampleRate = 16000;
+            const sourceSampleRate = captureContext.sampleRate;
+            const sampleRateRatio = sourceSampleRate / targetSampleRate;
+            const outputLength = Math.floor(inputData.length / sampleRateRatio);
+            const pcmData = new Int16Array(outputLength);
+            
+            for (let i = 0; i < outputLength; i++) {
+              const sourceIndex = Math.floor(i * sampleRateRatio);
+              const s = Math.max(-1, Math.min(1, inputData[sourceIndex]));
               pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
             }
             
+            // Send PCM data
             wsRef.current.send(JSON.stringify({
               event: "audio_chunk",
               data: Array.from(pcmData)
@@ -170,19 +201,37 @@ export default function PronunciationGame() {
         };
         
         source.connect(processor);
-        processor.connect(audioContextRef.current.destination);
+        processor.connect(captureContext.destination);
+        
+        console.log("Microphone initialized successfully at", captureContext.sampleRate, "Hz");
       } catch (error) {
         console.error("Error initializing audio:", error);
         toast({
           title: "Microphone Error",
-          description: "Could not access your microphone",
+          description: "Could not access your microphone. Please allow microphone access.",
           variant: "destructive",
         });
       }
     };
 
     initAudio();
-  }, [gameStarted, gameState.botIsSpeaking, toast]);
+
+    // Cleanup function
+    return () => {
+      if (processorRef.current) {
+        processorRef.current.disconnect();
+        processorRef.current = null;
+      }
+      if (captureContextRef.current) {
+        captureContextRef.current.close();
+        captureContextRef.current = null;
+      }
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+      }
+    };
+  }, [gameStarted, toast]);
 
   const playNextAudio = () => {
     if (isPlayingRef.current || audioQueueRef.current.length === 0 || !audioContextRef.current) {

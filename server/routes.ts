@@ -277,12 +277,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Generate audio from Deepgram TTS
       const audioBuffer = await deepgramService.generateTTS(text);
 
-      // Chunk audio into 20ms frames (320 bytes for 16kHz linear16)
-      const chunkSize = 320;
+      // Skip WAV header (44 bytes) to get raw PCM data
+      const pcmData = audioBuffer.slice(44);
+      
+      // Chunk audio into 20ms frames (640 bytes for 16kHz linear16 stereo, or 320 for mono)
+      const chunkSize = 640; // 20ms at 16kHz
       const chunks: Buffer[] = [];
       
-      for (let i = 0; i < audioBuffer.length; i += chunkSize) {
-        chunks.push(audioBuffer.slice(i, i + chunkSize));
+      for (let i = 0; i < pcmData.length; i += chunkSize) {
+        const end = Math.min(i + chunkSize, pcmData.length);
+        chunks.push(pcmData.slice(i, end));
       }
 
       // Stream chunks to frontend
@@ -290,7 +294,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (ws.readyState === WebSocket.OPEN) {
           sendMessage(ws, 'audio_chunk', Array.from(chunk));
           // Small delay between chunks for smooth playback
-          await new Promise(resolve => setTimeout(resolve, 15));
+          await new Promise(resolve => setTimeout(resolve, 18));
         }
       }
 
