@@ -43,7 +43,8 @@ A real-time AI-powered pronunciation tutor game for children that uses WebSocket
 
 ## Technical Specifications
 - **Audio Format**: Linear16 PCM at 16kHz, mono, 16-bit
-- **Chunk Size**: 20ms (320 bytes)
+- **Browser Capture**: 4096 buffer size (power of 2), downsampling from browser rate to 16kHz
+- **Barge-in Protection**: `botIsSpeakingRef` ensures audio only sent when AI is silent
 - **WebSocket Path**: `/ws`
 - **Scoring Formula**: `baseScore = (phonemeSimilarity * 0.6) + (deepgramConfidence * 0.4)`
 - **Success Threshold**: 80% for perfect, 60-79% for partial, <60% needs retry
@@ -54,7 +55,11 @@ A real-time AI-powered pronunciation tutor game for children that uses WebSocket
 - `MONGODB_URI`: MongoDB connection string
 
 ## Recent Changes
-- 2025-01-16: Initial project setup with complete schema and frontend components
-- Child-friendly design system with Fredoka and Bubblegum Sans fonts
-- Real-time game interface with microphone visualizer and progress tracking
-- Theme support (light/dark mode) with playful color palette
+- 2025-10-16: Complete implementation with all integrations working
+  - Fixed audio pipeline: ScriptProcessor with valid buffer size (4096), proper resampling
+  - Implemented barge-in protection using botIsSpeakingRef to prevent feedback loops
+  - All backend services operational: Deepgram STT/TTS, OpenAI word generation & feedback
+  - Phonetic analysis with metaphone + string similarity
+  - MongoDB integration for profiles and sessions
+  - Child-friendly UI with Fredoka font, animations, confetti celebrations
+  - Complete WebSocket bidirectional streaming working end-to-end
